@@ -107,7 +107,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 <div class="grid" id="grid">
   <div class="panel chart"><h2>Barometric Pressure <span class="hint">altitude cross-check</span></h2><div id="c-press"></div></div>
   <div class="panel chart"><h2>Temperature &amp; Humidity</h2><div id="c-th"></div></div>
-  <div class="panel chart"><h2>Acceleration Magnitude <span class="hint">burst shock</span></h2><div id="c-acc"></div></div>
+  <div class="panel chart"><h2>Acceleration Magnitude <span class="hint">peak ~6 g during descent tumble</span></h2><div id="c-acc"></div></div>
   <div class="panel chart"><h2>Orientation <span class="hint">pitch / roll / yaw</span></h2><div id="c-ori"></div></div>
   <div class="panel chart"><h2>Ground Speed <span class="hint">jet-stream drift</span></h2><div id="c-spd"></div></div>
   <div class="panel chart"><h2>Satellite Modem &amp; GPS</h2><div id="c-sat"></div></div>
@@ -167,7 +167,7 @@ const cardDefs = [
   ['Track distance', ST.track_distance_km.toFixed(1), 'km'],
   ['Min pressure', ST.min_pressure, 'hPa'],
   ['Min temp', ST.min_temp, '°C'],
-  ['Burst shock', ST.max_accel_g, 'g'],
+  ['Peak g-force', ST.max_accel_g, 'g'],
 ];
 document.getElementById('cards').innerHTML = cardDefs.map(c=>
   `<div class="card"><div class="k">${c[0]}</div><div class="v">${c[1]}<small>${c[2]}</small></div></div>`).join('');
@@ -268,8 +268,9 @@ const uOri = mk('c-ori',170,el=>baseOpts(el,
   {d:{}},[yaxis('d',3,'#8a97b4')]));
 uOri.setData([X,S.pitch,S.roll,S.yaw]);
 
-// ground speed km/h derived from gspeed (m/s)
-const spdKmh = S.gspeed.map(v=>v==null?null:+(v*3.6).toFixed(1));
+// ground speed km/h from the GPS module's own Doppler speed (knots) — robust,
+// unlike position-differencing which is corrupted by single-fix jumps
+const spdKmh = S.spd.map(v=>v==null?null:+(v*1.852).toFixed(1));
 const uSpd = mk('c-spd',170,el=>baseOpts(el,[line('Ground speed','kmh','#38d39f',1.8)],
   {kmh:{}},[yaxis('kmh',3,'#38d39f')]));
 uSpd.setData([X,spdKmh]);

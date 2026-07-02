@@ -44,10 +44,10 @@ else is unaffected.
 | Flight duration | 1 h 13 m (55 m up / 18 m down) |
 | Mean / max ascent rate | 7.9 / 12.9 m/s |
 | Max descent rate | 53 m/s (post-burst free-fall in thin air) |
-| Max ground speed | 489 km/h (jet-stream drift) |
+| Max ground speed | 312 km/h (GPS Doppler — jet-stream drift) |
 | Track distance / straight line | 154 km / 147 km |
 | Min pressure | 16.1 hPa |
-| Burst shock | 6.0 g |
+| Peak g-force | 6.0 g (descent tumble, ~8 min after burst) |
 
 ## Reading the sensors
 
@@ -58,7 +58,11 @@ else is unaffected.
   reading dips negative in the cold, dry stratosphere — a known sensor artifact.
 - **IMU orientation** shows the payload tumbling/spinning throughout the flight
   (yaw sweeps the full 0–360°) and settling once it lands.
-- **Acceleration magnitude** spikes to ~6 g around burst.
+- **Acceleration magnitude** peaks at ~6 g during the violent descent tumble
+  (~02:28, about 8 min after burst), not at the burst instant.
+- **Ground speed** uses the GPS module's own Doppler speed. Differencing raw
+  positions instead gives a spurious 489 km/h from occasional single-fix jumps —
+  the Doppler figure (~312 km/h, still a genuine strong jet stream) is trustworthy.
 
 ## Files
 
