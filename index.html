@@ -21,8 +21,11 @@ html,body{margin:0;height:100%}
 body{
   background:radial-gradient(1200px 600px at 70% -10%,#16203a 0%,var(--bg) 60%);
   color:var(--ink); font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  padding:18px 20px 150px; -webkit-font-smoothing:antialiased;
+  padding:18px 20px 0; -webkit-font-smoothing:antialiased;
 }
+/* real element reserves scroll space under the fixed dock (body padding-bottom
+   is unreliable on the root scroller); height is set to the dock's height in JS */
+#dock-spacer{height:190px}
 h1{font-size:20px;margin:0;font-weight:650;letter-spacing:.2px}
 .sub{color:var(--dim);font-size:12.5px;margin-top:3px}
 header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:16px}
@@ -114,6 +117,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </div>
 
 <div class="foot" id="foot"></div>
+
+<div id="dock-spacer"></div>
 
 <div class="dock">
   <div class="dock-row">
@@ -346,11 +351,18 @@ document.addEventListener('keydown',e=>{if(e.code==='Space'){e.preventDefault();
   else if(e.code==='ArrowLeft'){pause();goTo(cur- (e.shiftKey?60:1),false);}});
 
 /* responsive */
-function resize(){for(const c of charts){c.u.setSize({width:c.el.clientWidth||520,height:+c.el.dataset.h});}}
+const dockEl=document.querySelector('.dock');
+const spacerEl=document.getElementById('dock-spacer');
+// Reserve exactly the dock's real height so the fixed control bar never covers
+// the last charts (the readout chips wrap to more rows on narrow screens).
+function fitDock(){spacerEl.style.height=(dockEl.offsetHeight+22)+'px';}
+function resize(){fitDock();for(const c of charts){c.u.setSize({width:c.el.clientWidth||520,height:+c.el.dataset.h});}}
 window.addEventListener('resize',()=>{clearTimeout(window._rt);window._rt=setTimeout(resize,120);});
+if(window.ResizeObserver){new ResizeObserver(fitDock).observe(dockEl);}
 
 const startIdx=Math.max(0,Math.min(N-1,Math.round(M.launch_t-X[0])));
 cur=startIdx;goTo(startIdx,false);
+fitDock();
 setTimeout(()=>{resize();goTo(startIdx,false);},60);
 })();
 </script>
