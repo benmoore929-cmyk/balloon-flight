@@ -28,15 +28,26 @@ body{
 #dock-spacer{height:190px}
 h1{font-size:20px;margin:0;font-weight:650;letter-spacing:.2px}
 .sub{color:var(--dim);font-size:12.5px;margin-top:3px}
-header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:14px}
 .badge{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:5px 12px;color:var(--dim);font-size:12px}
 .badge b{color:var(--ink)}
+
+/* flight switcher */
+.fltsel{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.flt-btn{background:var(--panel);border:1px solid var(--line);color:var(--dim);border-radius:12px;
+  padding:9px 18px;font-size:14.5px;font-weight:650;cursor:pointer;display:flex;flex-direction:column;
+  gap:1px;line-height:1.2;min-width:140px;transition:border-color .12s,background .12s}
+.flt-btn span{font-size:11px;font-weight:500;color:var(--dim)}
+.flt-btn:hover{border-color:#3a4a68}
+.flt-btn.active{color:var(--ink);background:var(--panel2);border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.flt-btn.active span{color:var(--accent)}
 
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px;box-shadow:var(--shadow)}
 .card .k{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
 .card .v{font-size:22px;font-weight:680;margin-top:4px;font-variant-numeric:tabular-nums}
 .card .v small{font-size:12px;color:var(--dim);font-weight:500;margin-left:3px}
+.card.note .k::after{content:' ⓘ';color:var(--warn);font-size:10px}
 
 .hero{display:grid;grid-template-columns:minmax(340px,5fr) 7fr;gap:14px;margin-bottom:14px}
 @media(max-width:980px){.hero{grid-template-columns:1fr}}
@@ -93,11 +104,13 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
   </div>
 </header>
 
+<div class="fltsel" id="fltsel"></div>
+
 <div class="cards" id="cards"></div>
 
 <div class="hero">
   <div class="panel">
-    <h2>Flight Track <span class="hint" id="map-hint">coloured by altitude</span></h2>
+    <h2>Flight Track <span class="hint" id="map-hint">coloured by altitude · other flight in grey</span></h2>
     <div id="map"></div>
     <div class="legend"><span>0 m</span><div class="bar"></div><span id="leg-max">26 km</span></div>
   </div>
@@ -108,9 +121,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </div>
 
 <div class="grid" id="grid">
-  <div class="panel chart"><h2>Barometric Pressure <span class="hint">altitude cross-check</span></h2><div id="c-press"></div></div>
-  <div class="panel chart"><h2>Temperature &amp; Humidity</h2><div id="c-th"></div></div>
-  <div class="panel chart"><h2>Acceleration Magnitude <span class="hint">peak ~6 g during descent tumble</span></h2><div id="c-acc"></div></div>
+  <div class="panel chart"><h2>Barometric Pressure <span class="hint" id="press-hint">altitude cross-check</span></h2><div id="c-press"></div></div>
+  <div class="panel chart"><h2>Temperature &amp; Humidity <span class="hint">internal (payload) sensor</span></h2><div id="c-th"></div></div>
+  <div class="panel chart"><h2>Acceleration Magnitude <span class="hint">peak during descent tumble</span></h2><div id="c-acc"></div></div>
   <div class="panel chart"><h2>Orientation <span class="hint">pitch / roll / yaw</span></h2><div id="c-ori"></div></div>
   <div class="panel chart"><h2>Ground Speed <span class="hint">jet-stream drift</span></h2><div id="c-spd"></div></div>
   <div class="panel chart"><h2>Satellite Modem &amp; GPS</h2><div id="c-sat"></div></div>
@@ -139,13 +152,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 <script>
 (function(){
 "use strict";
-const D = window.FLIGHT_DATA;
-if(!D){document.getElementById('sub').textContent='Could not load flight_data.js — keep it in the same folder as index.html.';return;}
+const DATA = window.FLIGHT_DATA;
+const subEl=document.getElementById('sub');
+if(!DATA||!DATA.flights){subEl.textContent='Could not load flight_data.js — keep it in the same folder as index.html.';return;}
 if(typeof L==='undefined'||typeof uPlot==='undefined'){
-  document.getElementById('sub').textContent='Chart/map libraries did not load — make sure the "vendor" folder is next to index.html.';return;}
-const S = D.series, M = D.meta, ST = M.stats;
-const N = S.t.length, t0 = M.t0;
-const X = S.t;                       // epoch seconds, treated as linear (MET on axis)
+  subEl.textContent='Chart/map libraries did not load — make sure the "vendor" folder is next to index.html.';return;}
+const ORDER=DATA.order;
+
+/* ---- current-flight state (reassigned by loadFlight) ---- */
+let D,S,M,ST,N,t0,X,spdKmh,cur=0,activeId=null;
 
 /* ---------- time formatting (UTC) ---------- */
 const pad=n=>String(n).padStart(2,'0');
@@ -156,32 +171,15 @@ function met(ep){let s=Math.round(ep-t0);const sign=s<0?'-':'+';s=Math.abs(s);
   return 'T'+sign+(h?h+':':'')+pad(m)+':'+pad(ss);}
 function dur(s){const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return (h?h+'h ':'')+m+'m';}
 
-/* ---------- header + stat cards ---------- */
-document.getElementById('sub').textContent =
-  `Launch ${utcHMS(M.launch_t)} · Burst ${utcHMS(M.apogee_t)} · Landing ${utcHMS(M.land_t)} UTC — timestamps UTC`;
-document.getElementById('b-date').textContent = M.flight_date;
-document.getElementById('b-apo').textContent = (ST.max_altitude/1000).toFixed(2)+' km';
-document.getElementById('b-dur').textContent = dur(ST.flight_duration_s);
-document.getElementById('leg-max').textContent = (ST.max_altitude/1000).toFixed(0)+' km';
+/* ---------- flight selector ---------- */
+const fltsel=document.getElementById('fltsel');
+fltsel.innerHTML=ORDER.map(id=>{const m=DATA.flights[id].meta;
+  return `<button class="flt-btn" data-fid="${id}">${m.label}`+
+         `<span>apogee ${(m.stats.max_altitude/1000).toFixed(1)} km · ${dur(m.stats.flight_duration_s)}</span></button>`;}).join('');
+fltsel.querySelectorAll('.flt-btn').forEach(b=>b.addEventListener('click',()=>{
+  if(b.dataset.fid===activeId)return; pause(); loadFlight(b.dataset.fid);}));
 
-const cardDefs = [
-  ['Peak altitude', (ST.max_altitude/1000).toFixed(2), 'km'],
-  ['Max ascent rate', ST.max_ascent_rate, 'm/s'],
-  ['Max descent rate', Math.abs(ST.max_descent_rate), 'm/s'],
-  ['Max ground speed', ST.max_ground_speed_kmh, 'km/h'],
-  ['Track distance', ST.track_distance_km.toFixed(1), 'km'],
-  ['Min pressure', ST.min_pressure, 'hPa'],
-  ['Min temp', ST.min_temp, '°C'],
-  ['Peak g-force', ST.max_accel_g, 'g'],
-];
-document.getElementById('cards').innerHTML = cardDefs.map(c=>
-  `<div class="card"><div class="k">${c[0]}</div><div class="v">${c[1]}<small>${c[2]}</small></div></div>`).join('');
-document.getElementById('foot').innerHTML =
-  `${N.toLocaleString()} timeline samples @1 Hz · ${D.track.length.toLocaleString()} map points · `+
-  `ascent ${dur(ST.ascent_duration_s)} / descent ${dur(ST.descent_duration_s)} · `+
-  `straight-line ${ST.straight_distance_km} km · max ${ST.max_satellites} satellites`;
-
-/* ---------- altitude colour map ---------- */
+/* ---------- altitude colour map (uses current ST.max_altitude) ---------- */
 const STOPS=[[0,40,60,180],[.2,0,150,200],[.4,0,180,120],[.6,180,200,40],[.8,240,150,30],[1,220,40,40]];
 function altColor(alt){let f=Math.max(0,Math.min(1,alt/ST.max_altitude));
   for(let i=1;i<STOPS.length;i++){if(f<=STOPS[i][0]){const a=STOPS[i-1],b=STOPS[i];
@@ -189,49 +187,57 @@ function altColor(alt){let f=Math.max(0,Math.min(1,alt/ST.max_altitude));
     return `rgb(${Math.round(a[1]+k*(b[1]-a[1]))},${Math.round(a[2]+k*(b[2]-a[2]))},${Math.round(a[3]+k*(b[3]-a[3]))})`;}}
   return 'rgb(220,40,40)';}
 
-/* ---------- map ---------- */
-const map = L.map('map',{preferCanvas:true,zoomControl:true}).setView(M.coords.apogee,8);
-document.getElementById('map').style.background='#223047';   // shown if tiles are blocked/offline
-const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+/* ---------- map (created once) ---------- */
+const map=L.map('map',{preferCanvas:true,zoomControl:true}).setView([-32,147],7);
+document.getElementById('map').style.background='#223047';
+const osm=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
   {maxZoom:18,attribution:'© OpenStreetMap'}).addTo(map);
-const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+const esri=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
   {maxZoom:18,attribution:'Esri'});
-L.control.layers({'Map':osm,'Satellite':sat}).addTo(map);
-// If the base map can't be reached (offline / filtered network) the coloured
-// track, markers and position dot still render on a plain background.
+L.control.layers({'Map':osm,'Satellite':esri}).addTo(map);
 let tileErrs=0;
-osm.on('tileerror',()=>{ if(++tileErrs===3){
-  document.getElementById('map-hint').textContent='base map offline · track shown'; }});
+osm.on('tileerror',()=>{if(++tileErrs===3)document.getElementById('map-hint').textContent='base map offline · track shown';});
+const flightLayer=L.layerGroup().addTo(map);
+let posMarker=null;
 
-const T = D.track;                    // [lat,lon,alt]
-for(let i=1;i<T.length;i++){
-  L.polyline([[T[i-1][0],T[i-1][1]],[T[i][0],T[i][1]]],
-    {color:altColor((T[i-1][2]+T[i][2])/2),weight:3.5,opacity:.95}).addTo(map);
-}
-if(D.recovery && D.recovery.length>1){
-  L.polyline(D.recovery.map(p=>[p[0],p[1]]),
-    {color:'#7c88a8',weight:2,opacity:.7,dashArray:'4 5'}).addTo(map).bindPopup('Post-landing / recovery track');
-}
 function evMarker(ll,color,label,subtxt){
   L.circleMarker(ll,{radius:7,color:'#0b0f1a',weight:2,fillColor:color,fillOpacity:1})
-    .addTo(map).bindPopup(`<b>${label}</b><br>${subtxt}`);
-}
-evMarker(M.coords.launch,'#38d39f','Launch',`${utcHMS(M.launch_t)} UTC · ${M.ground_alt} m`);
-evMarker(M.coords.apogee,'#ff5d6c','Burst / Apogee',`${utcHMS(M.apogee_t)} UTC · ${ST.max_altitude.toLocaleString()} m`);
-evMarker(M.coords.landing,'#ff9f40','Landing',`${utcHMS(M.land_t)} UTC`);
-map.fitBounds(L.latLngBounds(T.map(p=>[p[0],p[1]])).pad(0.12));
-const posMarker = L.circleMarker(M.coords.launch,
-  {radius:8,color:'#fff',weight:3,fillColor:'#4da3ff',fillOpacity:1}).addTo(map);
+    .addTo(flightLayer).bindPopup(`<b>${label}</b><br>${subtxt}`);}
 
-/* ---------- uPlot charts ---------- */
+function drawFlightOnMap(){
+  flightLayer.clearLayers();
+  // faint track(s) of the other flight(s) for spatial comparison
+  for(const id of ORDER){ if(id===activeId) continue;
+    const ot=DATA.flights[id].track;
+    if(ot&&ot.length>1) L.polyline(ot.map(p=>[p[0],p[1]]),
+      {color:'#5b6683',weight:1.6,opacity:.5}).addTo(flightLayer).bindPopup(DATA.flights[id].meta.label+' track'); }
+  // active flight: recovery drift (dashed) then altitude-coloured track
+  if(D.recovery&&D.recovery.length>1)
+    L.polyline(D.recovery.map(p=>[p[0],p[1]]),{color:'#7c88a8',weight:2,opacity:.7,dashArray:'4 5'})
+      .addTo(flightLayer).bindPopup('Post-landing / recovery track');
+  const T=D.track;
+  for(let i=1;i<T.length;i++)
+    L.polyline([[T[i-1][0],T[i-1][1]],[T[i][0],T[i][1]]],
+      {color:altColor((T[i-1][2]+T[i][2])/2),weight:3.5,opacity:.95}).addTo(flightLayer);
+  evMarker(M.coords.launch,'#38d39f','Launch — '+M.label,`${utcHMS(M.launch_t)} UTC · ${M.ground_alt} m`);
+  evMarker(M.coords.apogee,'#ff5d6c','Burst / Apogee — '+M.label,`${utcHMS(M.apogee_t)} UTC · ${ST.max_altitude.toLocaleString()} m`);
+  evMarker(M.coords.landing,'#ff9f40','Landing — '+M.label,`${utcHMS(M.land_t)} UTC`);
+  // position marker re-added last so it draws on top of the track
+  if(posMarker) map.removeLayer(posMarker);
+  posMarker=L.circleMarker(M.coords.launch,
+    {radius:8,color:'#fff',weight:3,fillColor:'#4da3ff',fillOpacity:1}).addTo(map);
+  map.fitBounds(L.latLngBounds(T.map(p=>[p[0],p[1]])).pad(0.15));
+  document.getElementById('leg-max').textContent=(ST.max_altitude/1000).toFixed(0)+' km';
+}
+
+/* ---------- uPlot charts (created once, data set per flight) ---------- */
 const charts=[];
 const metAxisVals=(u,ticks)=>ticks.map(v=>met(v));
 const AX={stroke:'#8a97b4',grid:{stroke:'rgba(120,140,180,.12)'},ticks:{stroke:'rgba(120,140,180,.2)'},
   font:'11px -apple-system,sans-serif'};
 function baseOpts(el,seriesArr,scalesArr,axesExtra){
-  const w=el.clientWidth||520;
   return {
-    width:w,height:el.dataset.h?+el.dataset.h:170,
+    width:el.clientWidth||520,height:el.dataset.h?+el.dataset.h:170,
     cursor:{sync:{key:'met'},x:true,y:false,points:{size:7}},
     legend:{show:false},
     scales:Object.assign({x:{time:false}},scalesArr),
@@ -240,62 +246,71 @@ function baseOpts(el,seriesArr,scalesArr,axesExtra){
     hooks:{setCursor:[u=>{const i=u.cursor.idx; if(i!=null) goTo(i,true);}]}
   };
 }
-function line(label,scale,color,w){return {label,scale,stroke:color,width:w||1.6,
-  points:{show:false},spanGaps:true};}
+function line(label,scale,color,w){return {label,scale,stroke:color,width:w||1.6,points:{show:false},spanGaps:true};}
 function yaxis(scale,side,color){return Object.assign({},AX,{scale,side:side||3,
   stroke:color||'#8a97b4',grid:side===1?{show:false}:AX.grid,size:52});}
-
 function mk(id,h,opts){const el=document.getElementById(id);el.dataset.h=h;
   const u=new uPlot(opts(el),null,el);charts.push({u,el});return u;}
 
-// Altitude + vertical rate (hero)
-const uAlt = mk('c-alt',300,el=>baseOpts(el,
+const uAlt=mk('c-alt',300,el=>baseOpts(el,
   [line('Altitude','m','#4da3ff',2.2),line('Vertical rate','ms','#ff9f40',1.4)],
-  {m:{},ms:{}},
-  [yaxis('m',3,'#4da3ff'),yaxis('ms',1,'#ff9f40')]));
-uAlt.setData([X,S.alt,S.vrate]);
-
-const uPress = mk('c-press',170,el=>baseOpts(el,[line('Pressure','hpa','#c58bff',1.8)],
+  {m:{},ms:{}},[yaxis('m',3,'#4da3ff'),yaxis('ms',1,'#ff9f40')]));
+const uPress=mk('c-press',170,el=>baseOpts(el,[line('Pressure','hpa','#c58bff',1.8)],
   {hpa:{}},[yaxis('hpa',3,'#c58bff')]));
-uPress.setData([X,S.press]);
-
-const uTH = mk('c-th',170,el=>baseOpts(el,
+const uTH=mk('c-th',170,el=>baseOpts(el,
   [line('Temp','c','#ff7a7a',1.8),line('Humidity','h','#5ad1e6',1.4)],
   {c:{},h:{}},[yaxis('c',3,'#ff7a7a'),yaxis('h',1,'#5ad1e6')]));
-uTH.setData([X,S.temp,S.humid]);
-
-const uAcc = mk('c-acc',170,el=>baseOpts(el,[line('|accel|','g','#ffd166',1.8)],
+const uAcc=mk('c-acc',170,el=>baseOpts(el,[line('|accel|','g','#ffd166',1.8)],
   {g:{}},[yaxis('g',3,'#ffd166')]));
-uAcc.setData([X,S.amag]);
-
-const uOri = mk('c-ori',170,el=>baseOpts(el,
+const uOri=mk('c-ori',170,el=>baseOpts(el,
   [line('Pitch','d','#7ee081',1.4),line('Roll','d','#4da3ff',1.4),line('Yaw','d','#ff9f40',1.4)],
   {d:{}},[yaxis('d',3,'#8a97b4')]));
-uOri.setData([X,S.pitch,S.roll,S.yaw]);
-
-// ground speed km/h from the GPS module's own Doppler speed (knots) — robust,
-// unlike position-differencing which is corrupted by single-fix jumps
-const spdKmh = S.spd.map(v=>v==null?null:+(v*1.852).toFixed(1));
-const uSpd = mk('c-spd',170,el=>baseOpts(el,[line('Ground speed','kmh','#38d39f',1.8)],
+const uSpd=mk('c-spd',170,el=>baseOpts(el,[line('Ground speed','kmh','#38d39f',1.8)],
   {kmh:{}},[yaxis('kmh',3,'#38d39f')]));
-uSpd.setData([X,spdKmh]);
-
-const uSat = mk('c-sat',170,el=>baseOpts(el,
+const uSat=mk('c-sat',170,el=>baseOpts(el,
   [line('Signal','sig','#ffcc55',1.8),line('Satellites','sat','#4da3ff',1.4)],
   {sig:{range:[0,6]},sat:{}},[yaxis('sig',3,'#ffcc55'),yaxis('sat',1,'#4da3ff')]));
-uSat.setData([X,S.sig,S.sats]);
 
-/* ---------- shared cursor / scrubber / playback ---------- */
-const scrub=document.getElementById('scrub');scrub.max=N-1;
+/* ---------- readout chips (once) ---------- */
+const scrub=document.getElementById('scrub');
 const elMet=document.getElementById('met'),elUtc=document.getElementById('utc'),
       elPhase=document.getElementById('phase'),readout=document.getElementById('readout');
-const RO=[['alt','Altitude','m',0],['vrate','V-rate','m/s',1],['spdkmh','Speed','km/h',0],
-  ['press','Pressure','hPa',1],['temp','Temp','°C',1],['humid','Humidity','%',0],
-  ['amag','Accel','g',2],['pitch','Pitch','°',0],['sats','Sats','',0],['sig','Signal','',0],
-  ['pos','Position','',0]];
+const RO=[['alt','Altitude'],['vrate','V-rate'],['spdkmh','Speed'],['press','Pressure'],
+  ['temp','Temp'],['humid','Humidity'],['amag','Accel'],['pitch','Pitch'],['sats','Sats'],
+  ['sig','Signal'],['pos','Position']];
 readout.innerHTML=RO.map(r=>`<div class="chip"><div class="k">${r[1]}</div><div class="v" id="ro-${r[0]}">—</div></div>`).join('');
 function fmt(v,d){return v==null?'—':(d?v.toFixed(d):Math.round(v).toLocaleString());}
+function set(id,v){document.getElementById(id).textContent=v;}
 
+/* ---------- header + cards (per flight) ---------- */
+function updateHeaderAndCards(){
+  subEl.textContent=`Launch ${utcHMS(M.launch_t)} · Burst ${utcHMS(M.apogee_t)} · Landing ${utcHMS(M.land_t)} UTC — timestamps UTC`;
+  document.getElementById('b-date').textContent=M.flight_date;
+  document.getElementById('b-apo').textContent=(ST.max_altitude/1000).toFixed(2)+' km';
+  document.getElementById('b-dur').textContent=dur(ST.flight_duration_s);
+  const pressLow=ST.min_pressure!=null&&ST.min_pressure<1;
+  const cards=[
+    ['Peak altitude',(ST.max_altitude/1000).toFixed(2),'km'],
+    ['Max ascent rate',ST.max_ascent_rate,'m/s'],
+    ['Max descent rate',Math.abs(ST.max_descent_rate),'m/s'],
+    ['Max ground speed',ST.max_ground_speed_kmh,'km/h'],
+    ['Track distance',(+ST.track_distance_km).toFixed(1),'km'],
+    ['Min pressure',ST.min_pressure,'hPa',pressLow?'Sensor bottoms out below its range near apogee (~36 km); true pressure ≈ 5–6 hPa.':''],
+    ['Min temp',ST.min_temp,'°C'],
+    ['Peak g-force',ST.max_accel_g,'g'],
+  ];
+  if(ST.photos_captured!=null) cards.push(['Photos captured',ST.photos_captured,'']);
+  document.getElementById('cards').innerHTML=cards.map(c=>
+    `<div class="card${c[3]?' note':''}"${c[3]?` title="${c[3]}"`:''}>`+
+    `<div class="k">${c[0]}</div><div class="v">${c[1]}<small>${c[2]}</small></div></div>`).join('');
+  document.getElementById('press-hint').textContent=pressLow?'floors out near apogee':'altitude cross-check';
+  document.getElementById('foot').innerHTML=
+    `${M.label} · ${N.toLocaleString()} timeline samples @1 Hz · ${D.track.length.toLocaleString()} map points · `+
+    `ascent ${dur(ST.ascent_duration_s)} / descent ${dur(ST.descent_duration_s)} · `+
+    `straight-line ${ST.straight_distance_km} km · max ${ST.max_satellites} satellites`;
+}
+
+/* ---------- shared cursor / scrubber / playback ---------- */
 let guard=false;
 function phaseAt(ep){
   if(ep<M.launch_t) return ['PRE-LAUNCH','#7c88a8'];
@@ -309,24 +324,18 @@ function goTo(i,fromCursor){
   elMet.textContent=met(ep);elUtc.textContent=utcHMS(ep);
   const ph=phaseAt(ep);elPhase.textContent=ph[0];elPhase.style.background=ph[1]+'22';elPhase.style.color=ph[1];
   scrub.value=i;scrub.style.setProperty('--pct',(i/(N-1)*100)+'%');
-  // readout chips
   set('ro-alt',fmt(S.alt[i],0)); set('ro-vrate',fmt(S.vrate[i],1)); set('ro-spdkmh',fmt(spdKmh[i],0));
   set('ro-press',fmt(S.press[i],1)); set('ro-temp',fmt(S.temp[i],1)); set('ro-humid',fmt(S.humid[i],0));
   set('ro-amag',fmt(S.amag[i],2)); set('ro-pitch',fmt(S.pitch[i],0)); set('ro-sats',fmt(S.sats[i],0));
   set('ro-sig',fmt(S.sig[i],0));
   set('ro-pos',(S.lat[i]==null?'—':S.lat[i].toFixed(3)+', '+S.lon[i].toFixed(3)));
-  // map marker
-  if(S.lat[i]!=null){posMarker.setLatLng([S.lat[i],S.lon[i]]);
+  if(S.lat[i]!=null&&posMarker){posMarker.setLatLng([S.lat[i],S.lon[i]]);
     posMarker.setStyle({fillColor:altColor(S.alt[i]||0)});}
-  // move synced cursor on charts (unless the update *came from* a cursor move)
   if(!fromCursor && !guard){guard=true;
-    const u=charts[0].u,left=u.valToPos(X[i],'x');
     for(const c of charts){c.u.setCursor({left:c.u.valToPos(X[i],'x'),top:10},false);}
     guard=false;}
   cur=i;
 }
-function set(id,v){document.getElementById(id).textContent=v;}
-let cur=0;
 scrub.addEventListener('input',()=>{pause();goTo(+scrub.value,false);});
 
 /* playback */
@@ -350,20 +359,37 @@ document.addEventListener('keydown',e=>{if(e.code==='Space'){e.preventDefault();
   else if(e.code==='ArrowRight'){pause();goTo(cur+ (e.shiftKey?60:1),false);}
   else if(e.code==='ArrowLeft'){pause();goTo(cur- (e.shiftKey?60:1),false);}});
 
-/* responsive */
+/* ---------- load a flight ---------- */
+function loadFlight(id){
+  activeId=id; D=DATA.flights[id]; S=D.series; M=D.meta; ST=M.stats;
+  N=S.t.length; t0=M.t0; X=S.t;
+  spdKmh=S.spd.map(v=>v==null?null:+(v*1.852).toFixed(1));
+  fltsel.querySelectorAll('.flt-btn').forEach(x=>x.classList.toggle('active',x.dataset.fid===id));
+  updateHeaderAndCards();
+  drawFlightOnMap();
+  uAlt.setData([X,S.alt,S.vrate]);
+  uPress.setData([X,S.press]);
+  uTH.setData([X,S.temp,S.humid]);
+  uAcc.setData([X,S.amag]);
+  uOri.setData([X,S.pitch,S.roll,S.yaw]);
+  uSpd.setData([X,spdKmh]);
+  uSat.setData([X,S.sig,S.sats]);
+  scrub.max=N-1;
+  const startIdx=Math.max(0,Math.min(N-1,Math.round(M.launch_t-X[0])));
+  cur=startIdx; goTo(startIdx,false);
+}
+
+/* ---------- responsive ---------- */
 const dockEl=document.querySelector('.dock');
 const spacerEl=document.getElementById('dock-spacer');
-// Reserve exactly the dock's real height so the fixed control bar never covers
-// the last charts (the readout chips wrap to more rows on narrow screens).
 function fitDock(){spacerEl.style.height=(dockEl.offsetHeight+22)+'px';}
 function resize(){fitDock();for(const c of charts){c.u.setSize({width:c.el.clientWidth||520,height:+c.el.dataset.h});}}
 window.addEventListener('resize',()=>{clearTimeout(window._rt);window._rt=setTimeout(resize,120);});
 if(window.ResizeObserver){new ResizeObserver(fitDock).observe(dockEl);}
 
-const startIdx=Math.max(0,Math.min(N-1,Math.round(M.launch_t-X[0])));
-cur=startIdx;goTo(startIdx,false);
+loadFlight(ORDER[0]);
 fitDock();
-setTimeout(()=>{resize();goTo(startIdx,false);},60);
+setTimeout(()=>{resize();goTo(cur,false);},60);
 })();
 </script>
 </body>
